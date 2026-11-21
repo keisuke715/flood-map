@@ -143,7 +143,6 @@ body[data-view="river"] [data-v]:not([data-v~="river"]){display:none!important}
   <h1>浸水予測AIイメージ</h1>
   <div class="modebar"><button class="mb" data-mode="real">気象庁データ</button><button class="mb" data-mode="sim">シミュレーション</button><button class="mb" data-mode="river">河川水位監視</button><button class="mb" data-mode="admin">管理画面</button></div>
   <div class="asof" id="asofBox">基準時刻 <input type="datetime-local" id="asOf" step="600"><button class="mb" id="asOfPrev" title="1時間前">−1h</button><button class="mb" id="asOfNext" title="1時間後">+1h</button><button class="mb" id="asOfNow">最新</button></div>
-  <span class="dummy" id="dummyTag">イメージ</span>
   <div id="alert" class="alert"></div>
   <div class="clock"><span id="clockLbl">現在時刻</span> <b id="nowClock">--:--:--</b><br>予測対象時刻 <span id="targetClock">--:--</span></div>
 </header>
@@ -151,19 +150,18 @@ body[data-view="river"] [data-v]:not([data-v~="river"]){display:none!important}
 <main>
   <!-- ===== 中央：地図＋時刻スライダー ===== -->
   <section class="card">
-    <h2>浸水予測マップ（<span id="areaTitle">福岡市</span>／地理院地図 3D）</h2>
     <div class="viewctl">
       背景：<button data-base="pale" class="on">淡色地図</button><button data-base="std">標準地図</button><button data-base="photo">航空写真</button>
       <span class="sep"></span>
-      標高の強調：<input id="exag" type="range" min="1" max="8" step="1" value="4" style="width:90px"><span id="exagVal">4倍</span>
+      標高の強調：<input id="exag" type="range" min="1" max="8" step="1" value="1" style="width:90px"><span id="exagVal">1倍</span>
       <span class="sep"></span>
-      <button id="sinkBtn">くぼ地を表示 OFF</button><button id="rainBtn">降水量メッシュ OFF</button><button id="facBtn" class="on">施設表示 ON</button><button id="senBtn" class="on">センサ表示 ON</button>
+      <button id="floodBtn" class="on">予想浸水深 ON</button><button id="sinkBtn">くぼ地を表示 OFF</button><button id="rainBtn">降水量メッシュ OFF</button><button id="facBtn" class="on">施設表示 ON</button><button id="senBtn" class="on">センサ表示 ON</button>
     </div>
     <div class="row2">
       移動：<select id="spot"><option value="">地点を選択</option></select>
       <button id="resetView" title="対象エリア全体を真上から表示します">視点リセット</button>
       <span class="sep"></span>
-      建物：<button id="bldgP">PLATEAU 3D建物 OFF</button><button id="bldgG">外形（高さ仮定）OFF</button>
+      建物：<button id="bldgG">建物（外形・高さは仮定）OFF</button>
     </div>
     <div class="note" id="bldgStatus" style="margin:0 0 4px;min-height:14px"></div>
     <div class="note" id="demStatus" style="margin:0 0 4px;min-height:14px"></div>
@@ -179,14 +177,14 @@ body[data-view="river"] [data-v]:not([data-v~="river"]){display:none!important}
         <span id="rainLegend" style="display:none"><b>降水量（mm/h）</b>
         <div><i style="background:#f2f2ff"></i>〜1</div><div><i style="background:#a0d2ff"></i>1〜5</div><div><i style="background:#2196f3"></i>5〜10</div>
         <div><i style="background:#ffeb3b"></i>10〜20</div><div><i style="background:#ff9800"></i>20〜30</div><div><i style="background:#f44336"></i>30〜50</div><div><i style="background:#b4006a"></i>50以上</div></span>
-        <b>予測浸水深</b>
+        <span id="floodLegend"><b>予測浸水深</b>
         <div><i style="background:#a9d2f3"></i>0.5m未満</div>
         <div><i style="background:#4f90d4"></i>0.5〜3m</div>
-        <div><i style="background:#1d4f99"></i>3m以上</div>
-        <b>くぼ地の深さ（地形）</b>
+        <div><i style="background:#1d4f99"></i>3m以上</div></span>
+        <span id="sinkLegend" style="display:none"><b>くぼ地の深さ（地形）</b>
         <div><i style="background:#f3d37a"></i>0.3m未満</div>
         <div><i style="background:#e08a2e"></i>0.3〜1m</div>
-        <div><i style="background:#8e3b8f"></i>1m以上</div>
+        <div><i style="background:#8e3b8f"></i>1m以上</div></span>
       </div>
       <div id="detail"></div>
       <div class="offline" id="offline">地図を読み込めませんでした。<br>この画面はインターネット接続（地理院タイル・地図ライブラリの取得）が必要です。<br>右側のパネルはダミーデータで動作します。</div>
@@ -197,7 +195,7 @@ body[data-view="river"] [data-v]:not([data-v~="river"]){display:none!important}
       <div class="timelabel" id="timeLabel"></div>
     </div>
     <div class="ticks" id="ticks"></div>
-    <div class="note">ホイール：拡大縮小／右ドラッグ：回転・傾き。地図クリックでその地点の予測を表示。出典：地理院タイル（淡色地図・標準地図・写真・標高タイル・最適化ベクトルタイル）を加工して作成、住所検索：国土地理院 住所検索API。</div>
+    <div class="note">浸水メッシュ：<span id="meshInfo">—</span>　出典：地理院タイル（淡色地図・標準地図・写真・標高タイル・最適化ベクトルタイル）を加工して作成、住所検索：国土地理院 住所検索API。</div>
   </section>
 
   <!-- ===== 右：サイドパネル ===== -->
@@ -232,12 +230,12 @@ body[data-view="river"] [data-v]:not([data-v~="river"]){display:none!important}
       <div class="tabpane on" id="tab-rain">
         <div class="note" id="simAreaNote" style="margin:0 0 6px"></div>
         <div class="tool">シナリオ：<select id="rainPreset">
-          <option value="">（選択して一括入力）</option><option value="weak">弱い雨</option><option value="normal">標準（初期値）</option>
-          <option value="heavy">豪雨</option><option value="linear">線状降水帯（仮）</option><option value="zero">雨がやむ</option></select></div>
+          <option value="">（選択して一括入力）</option><option value="yaya">やや強い雨（約15mm/h）</option><option value="tsuyoi">強い雨（約25mm/h）※初期値</option>
+          <option value="hageshii">激しい雨（約40mm/h）</option><option value="hijou">非常に激しい雨（約60mm/h）</option><option value="mouretsu">猛烈な雨（約90mm/h・線状降水帯のイメージ）</option><option value="zero">雨がやむ（30→0mm/h）</option></select></div>
         <div class="tool">倍率：<input id="rainMult" type="range" min="0.5" max="2" step="0.1" value="1" style="width:110px"><span id="rainMultVal">1.0倍</span>
           　現在の河川水位：<input id="level0" type="number" min="0" max="10" step="0.1" style="width:55px">m</div>
         <div class="raingrid" id="rainGrid"></div>
-        <div class="note">シミュレーションモードで有効（雨は「対象エリア」で選んだ市町村内にのみ降ります）。予測時間雨量[mm/h]（30分ごと）。雨が多いほど河川水位が早く上がり、排水能力を超えた分が低地に溜まります（仮の式）。</div>
+        <div class="note">シミュレーションモードで有効（雨は「対象エリア」で選んだ市町村内にのみ降ります）。予測時間雨量[mm/h]（30分ごと）。「現在」の値は、直近3時間も同じ強さで降っていたものとして扱います。雨が多いほど河川水位が早く上がり、排水能力を超えた分が低地に溜まります（仮の式）。</div>
       </div>
       <!-- 対象エリア（九州の市町村） -->
       <div class="tabpane" id="tab-area">
@@ -373,7 +371,7 @@ function muniHas(u,x,y){
 const DEFAULT_DATA = {
   mode:'real',                                  // 'real'＝実況（気象庁）／'sim'＝シミュレーション
   area:{ codes:['40130'] },                     // 対象市町村（JIS5桁。政令市は市のコード）
-  rain:{ fc:[44,50,46,38,30,22,15,10,6,4,2,1,0], mult:1, drain:30, level0:4.3 },   // シミュレーション用の降水量・排水能力（共通）
+  rain:{ fc:Array(13).fill(25), mult:1, drain:30, level0:4.3 },   // シミュレーション用の降水量・排水能力（共通）
   rivers:[                                      // 対象河川（管理画面の「河川管理」で編集）
     {id:'R-001',name:'那珂川',note:'那珂川水系（福岡市）'},
     {id:'R-002',name:'御笠川',note:'御笠川水系（福岡市・春日市・大野城市）'},
@@ -396,12 +394,13 @@ const DEFAULT_DATA = {
     {id:'S-004',name:'冠水センサ 清水（仮）',     lng:130.4110,lat:33.5720,readings:[0,0,0,0,0,0,0],  note:''}
   ]
 };
-const RAIN_PRESETS = {
-  weak:  [8,10,10,8,6,5,4,3,2,1,0,0,0],
-  normal:DEFAULT_DATA.rain.fc,
-  heavy: [44,70,80,75,60,45,30,20,12,8,4,2,0],
-  linear:[44,80,90,90,90,85,80,50,20,8,4,2,0],
-  zero:  [44,10,0,0,0,0,0,0,0,0,0,0,0]
+const RAIN_PRESETS = {   // 気象庁の「雨の強さ」の区分に合わせ、現在・直近3時間・先6時間とも同じ強さで降り続ける
+  yaya:   Array(13).fill(15),
+  tsuyoi: Array(13).fill(25),
+  hageshii:Array(13).fill(40),
+  hijou:  Array(13).fill(60),
+  mouretsu:Array(13).fill(90),
+  zero:   [30,0,0,0,0,0,0,0,0,0,0,0,0]
 };
 const clone=o=>JSON.parse(JSON.stringify(o));
 function normalizeData(d){
@@ -784,8 +783,8 @@ function fcAt(lng,lat){
   return out;
 }
 const ZERO_RAIN=()=>({obs:new Float32Array(7),fc:new Float32Array(STEPS+1),pre:new Float32Array(PRE_N)});
-function simSeries(){   // シミュレーション：現在までの雨は固定、先の雨は入力値×倍率
-  const obs=Float32Array.from(SIM_OBS_RAIN), fc=new Float32Array(STEPS+1); fc[0]=obs[6];
+function simSeries(){   // シミュレーション：現在（と直近3時間）は入力値のまま、先の雨は入力値×倍率
+  const obs=new Float32Array(7).fill(Math.max(0,+DATA.rain.fc[0]||0)), fc=new Float32Array(STEPS+1); fc[0]=obs[6];   // 直近3時間も「現在」と同じ強さで降っていたものとする
   for(let t=1;t<=STEPS;t++) fc[t]=Math.max(0,+DATA.rain.fc[t]||0)*DATA.rain.mult;
   return {obs,fc};
 }
@@ -804,12 +803,11 @@ function rainAtPoint(lng,lat){   // 地点の雨量 {obs[7], fc[13]} [mm/h]
 const terrClass=sk=>{ if(!sk) return TERR[3]; const d=sk.spill-sk.h; return d>=1?TERR[0]:d>=0.3?TERR[1]:TERR[2]; };
 const rv=v=>v>=0?v:0;
 function excess(r,sk){
-  const dr=+DATA.rain.drain||0, C=terrClass(sk), D=dr*C.k, Sc=dr*C.sc, dt=STEP_MIN/60, sim=DATA.mode==='sim';
+  const dr=+DATA.rain.drain||0, C=terrClass(sk), D=dr*C.k, Sc=dr*C.sc, dt=STEP_MIN/60;
   const out=new Float32Array(STEPS+1); out.past=new Float32Array(7);
   let S=0;
-  if(sim) S=0.5*Sc;   // シミュレーション：許容量の半分が溜まった状態から開始
-  else{ const seq=[...(r.pre||new Float32Array(PRE_N)),...r.obs];
-    for(let k=1;k<seq.length;k++){ S=Math.max(0,S+(rv(seq[k])-D)*dt); if(k>=PRE_N) out.past[k-PRE_N]=Math.max(0,S-Sc); } }
+  const seq=[...(r.pre||new Float32Array(PRE_N)),...r.obs];   // シミュレーションは3〜6時間前は雨なし（3時間前から降り始め）
+  for(let k=1;k<seq.length;k++){ S=Math.max(0,S+(rv(seq[k])-D)*dt); if(k>=PRE_N) out.past[k-PRE_N]=Math.max(0,S-Sc); }
   out[0]=Math.max(0,S-Sc);
   for(let t=1;t<=STEPS;t++){ S=Math.max(0,S+(rv(r.fc[t])-D)*dt); out[t]=Math.max(0,S-Sc); }
   return out;
@@ -997,7 +995,7 @@ function initMap(){
       layers:[{id:'pale',type:'raster',source:'pale'},{id:'std',type:'raster',source:'std',layout:{visibility:'none'}},
         {id:'photo',type:'raster',source:'photo',layout:{visibility:'none'}},
         hillshadeLayer()],
-      terrain:{source:'dem',exaggeration:4}}});
+      terrain:{source:'dem',exaggeration:1}}});
   map.addControl(new maplibregl.NavigationControl({visualizePitch:true}),'top-right');
   map.addControl(new maplibregl.ScaleControl({unit:'metric'}),'bottom-right');
   map.on('load',()=>{
@@ -1014,14 +1012,11 @@ function initMap(){
     map.addLayer({id:'area-fill',type:'fill',source:'area',paint:{'fill-color':'#22364a','fill-opacity':0.04}},'sink-fill');
     map.addLayer({id:'area-line',type:'line',source:'area',paint:{'line-color':'#c0392b','line-width':2.2,'line-dasharray':[3,2]}});
     // 建物
-    map.addSource('bldgP',{type:'vector',tiles:[BLDG_PLATEAU_URL],minzoom:10,maxzoom:16,
-      attribution:'<a href="https://github.com/indigo-lab/plateau-lod2-mvt">plateau-lod2-mvt by indigo-lab</a>（国土交通省 Project PLATEAU のデータを加工）'});
     map.addSource('bldgG',{type:'vector',tiles:[BLDG_GSI_URL],minzoom:4,maxzoom:16,attribution:GSI_ATTR});
     const ext=(id,src,layer,h)=>map.addLayer({id,type:'fill-extrusion',source:src,'source-layer':layer,layout:{visibility:'none'},
       paint:{'fill-extrusion-color':'#c9ccd1','fill-extrusion-opacity':0.92,'fill-extrusion-base':0,'fill-extrusion-height':h}},'flood-fill');
-    BLDG_LAYERS.P.forEach(n=>ext('bldgP-'+n,'bldgP',n,['coalesce',['get','z'],['get','height'],['get','measuredHeight'],0]));
     BLDG_LAYERS.G.forEach(n=>ext('bldgG-'+n,'bldgG',n,BLDG_GSI_HEIGHT));
-    map.on('error',e=>{ if(e.sourceId==='bldgP'||e.sourceId==='bldgG') $('bldgStatus').textContent=e.sourceId+'：読込エラー（接続・CORS・URLを確認）'; });
+    map.on('error',e=>{ if(e.sourceId==='bldgG') $('bldgStatus').textContent=e.sourceId+'：読込エラー（接続・CORS・URLを確認）'; });
     const pop=new maplibregl.Popup({closeButton:false,closeOnClick:false});
     map.on('mousemove','flood-fill',e=>{ if(pickCb) return; map.getCanvas().style.cursor='crosshair';
       pop.setLngLat(e.lngLat).setHTML(`予測浸水深 <b>${e.features[0].properties.depth.toFixed(2)}m</b>（${hhmm(cur)}）`).addTo(map);});
@@ -1078,7 +1073,7 @@ function checkBldg(k){
     $('bldgStatus').textContent=n?`${src}：建物 ${n} 件を読み込み（${f.join(', ')}）`:`${src}：表示範囲に建物データがありません（収録範囲外／ズーム不足／レイヤー名不一致の可能性）。ズーム14〜17で確認してください`;
   },2500);
 }
-[['P','bldgP','PLATEAU 3D建物'],['G','bldgG','外形（高さ仮定）']].forEach(([k,id,label])=>{
+[['G','bldgG','建物（外形・高さは仮定）']].forEach(([k,id,label])=>{
   $(id).onclick=()=>{ if(!mapReady) return; bldgOn[k]=!bldgOn[k];
     BLDG_LAYERS[k].forEach(n=>map.setLayoutProperty(id+'-'+n,'visibility',bldgOn[k]?'visible':'none'));
     $(id).classList.toggle('on',bldgOn[k]); $(id).textContent=label+(bldgOn[k]?' ON':' OFF');
@@ -1092,8 +1087,11 @@ function applyMkVis(){ for(const k in markers) markers[k].el.style.display=showM
 $('rainBtn').onclick=()=>{ rainOn=!rainOn; $('rainBtn').classList.toggle('on',rainOn); $('rainBtn').textContent='降水量メッシュ '+(rainOn?'ON':'OFF');
   $('rainLegend').style.display=rainOn?'':'none';
   if(mapReady){ map.setLayoutProperty('rain-fill','visibility',rainOn?'visible':'none'); if(rainOn) map.getSource('rain').setData(rainGeoJSON(cur)); } };
-$('sinkBtn').onclick=()=>{ sinkOn=!sinkOn; $('sinkBtn').classList.toggle('on',sinkOn); $('sinkBtn').textContent='くぼ地を表示 '+(sinkOn?'ON':'OFF');
+$('sinkBtn').onclick=()=>{ sinkOn=!sinkOn; $('sinkBtn').classList.toggle('on',sinkOn); $('sinkBtn').textContent='くぼ地を表示 '+(sinkOn?'ON':'OFF'); $('sinkLegend').style.display=sinkOn?'':'none';
   if(mapReady) map.setLayoutProperty('sink-fill','visibility',sinkOn?'visible':'none'); };
+let floodOn=true;
+$('floodBtn').onclick=()=>{ floodOn=!floodOn; $('floodBtn').classList.toggle('on',floodOn); $('floodBtn').textContent='予想浸水深 '+(floodOn?'ON':'OFF'); $('floodLegend').style.display=floodOn?'':'none';
+  if(mapReady) map.setLayoutProperty('flood-fill','visibility',floodOn?'visible':'none'); };
 
 /* =========================================================
    視点操作・ホイール
@@ -1237,7 +1235,7 @@ function closeDetail(){ selected=null; $('detail').style.display='none'; drawLis
    データ管理：降水量入力
    ========================================================= */
 function buildRainGrid(){
-  $('rainGrid').innerHTML=DATA.rain.fc.map((v,i)=>`<label>${i===0?'現在':after(i).replace('時間','h').replace('30分','30')}<input type="number" min="0" max="200" step="1" data-r="${i}" value="${i===0?SIM_OBS_RAIN[6]:v}" ${i===0?'disabled title="現在は実測値"':''}></label>`).join('');
+  $('rainGrid').innerHTML=DATA.rain.fc.map((v,i)=>`<label>${i===0?'現在':after(i).replace('時間','h').replace('30分','30')}<input type="number" min="0" max="200" step="1" data-r="${i}" value="${v}" ${i===0?'title="現在の強さ。直近3時間も同じ強さで降っていたものとして扱います"':''}></label>`).join('');
   $('rainGrid').querySelectorAll('input[data-r]').forEach(inp=>inp.oninput=()=>{ DATA.rain.fc[+inp.dataset.r]=Math.max(0,+inp.value||0); onDataChange(false); });
   $('rainMult').value=DATA.rain.mult; $('rainMultVal').textContent=(+DATA.rain.mult).toFixed(1)+'倍'; $('drain').value=DATA.rain.drain; $('level0').value=DATA.rain.level0;
 }
@@ -1253,7 +1251,6 @@ function updateRainStatus(){
     ? `${RAIN.asOf?'過去':'実況'}：${RAIN.status.obs}／${RAIN.status.fc}${RAIN.updated?'／更新 '+hhmmOf(RAIN.updated):''}`
     : `シミュレーション：雨は ${areaNames()}（${AREA.units.length}件・約${Math.round(AREA.areaKm2)}km²）にのみ降ります`;
   $('simAreaNote').textContent=`降雨エリア：${areaNames()}（${AREA.units.length}件）。変更は「対象エリア」タブで行います。`;
-  $('areaTitle').textContent=areaNames();
 }
 let CURVIEW=DATA.mode, shownView=null;   // 表示画面：'real'＝気象庁データ／'sim'＝シミュレーション／'admin'＝管理画面
 function updateModeUI(){
@@ -1262,7 +1259,6 @@ function updateModeUI(){
   document.body.dataset.view=v;
   $('asofBox').style.display=real?'':'none'; $('clockLbl').textContent=real&&RAIN.asOf?'過去表示（基準）':'現在時刻';
   document.querySelectorAll('[data-mode]').forEach(b=>b.classList.toggle('on',b.dataset.mode===v));
-  $('dummyTag').textContent=v==='admin'?'管理画面（施設・センサ・河川・データの保存/読込）':v==='river'?'河川水位監視（水位は仮のモデル）':real?'実況雨量（気象庁）／水位・浸水深は仮のモデル、施設・センサは架空':'シミュレーション（仮想の降雨）／予測結果・施設・センサは架空';
   $('wm').textContent=DATA.mode==='real'?'実況雨量＋仮モデル':'シミュレーション（仮想降雨）';
   const vis=[...document.querySelectorAll('[data-tab]')].filter(b=>b.dataset.v.split(' ').includes(v));   // この画面で使えるタブだけ表示
   const act=(shownView===v&&vis.find(b=>b.classList.contains('on')))||vis[0]; shownView=v; if(act) showTab(act);   // 画面を切り替えたら先頭のタブを開く
@@ -1584,13 +1580,13 @@ refreshSpots(); updateModeUI(); renderMuniList();
 recalc(); buildRainGrid(); initMap(); renderDataLists(); update(0);
 async function startDem(){   // 対象エリアの実標高を取得→くぼ地・流路を解析→浸水メッシュを作成
   const gen=++demGen, st=$('demStatus'); DEM=null; MESH.length=0; BURNS=currentBurns();
-  st.textContent='標高：読込準備中…'; refreshAll(); updateSinkLayer();
+  $('meshInfo').textContent=AREA.mesh+'m'; st.textContent='標高：読込準備中…'; refreshAll(); updateSinkLayer();
   try{
     const D=await loadDem(gen,m=>{ if(gen===demGen) st.textContent='標高：'+m; });
     if(!D||gen!==demGen) return;
     st.textContent='標高：くぼ地・流路を解析中…'; await new Promise(r=>setTimeout(r,30)); if(gen!==demGen) return;
     DEM=D; analyze(); refreshAll(); updateSinkLayer();
-    st.textContent=`標高：地理院DEM（${D.Z===15?'DEM5A':'DEM10B'}・約${Math.round(D.cell)}m格子、${D.ok}/${D.total}タイル）／くぼ地 ${D.cb.length}箇所／浸水メッシュ ${MESH.length}件（${AREA.mesh}m）`+(D.ok<D.total?'／一部タイル欠損（標高0m扱い）':'');
+    st.textContent='';
   }catch(e){ if(gen!==demGen) return; DEM=null; st.textContent='標高：取得できませんでした（'+e.message+'）。浸水は計算されません'; }
 }
 startDem(); if(DATA.mode==='real') refreshRain();
