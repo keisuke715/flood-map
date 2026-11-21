@@ -764,7 +764,7 @@ function idw(lng,lat,key='obs',len=7){
 function tileVal(m,lng,lat){
   if(!m) return undefined;
   const [gx,gy]=mercPx(lng,lat,RAIN_TILE_Z), tx=Math.floor(gx/256), ty=Math.floor(gy/256), t=m.get(tx+','+ty);
-  return t?t[Math.min(255,Math.floor(gy-ty*256))*256+Math.min(255,Math.floor(gx-tx*256))]:0;
+  return t?t[Math.min(255,Math.floor(gy-ty*256))*256+Math.min(255,Math.floor(gx-tx*256))]:undefined;   // 取得できなかったタイルは観測所の値を使う（0で上書きしない）
 }
 function fcAt(lng,lat){
   const out=new Float32Array(STEPS+1), F=RAIN.fc; if(!F) return out;
