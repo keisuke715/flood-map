@@ -764,7 +764,7 @@ function idw(lng,lat,key='obs',len=7){
 function tileVal(m,lng,lat){
   if(!m) return undefined;
   const [gx,gy]=mercPx(lng,lat,RAIN_TILE_Z), tx=Math.floor(gx/256), ty=Math.floor(gy/256), t=m.get(tx+','+ty);
-  return t?t[Math.min(255,Math.floor(gy-ty*256))*256+Math.min(255,Math.floor(gx-tx*256))]:0;
+  return t?t[Math.min(255,Math.floor(gy-ty*256))*256+Math.min(255,Math.floor(gx-tx*256))]:undefined;   // 取得できなかったタイルは観測所の値を使う（0で上書きしない）
 }
 function fcAt(lng,lat){
   const out=new Float32Array(STEPS+1), F=RAIN.fc; if(!F) return out;
@@ -793,6 +793,10 @@ function excess(r,sk){
   const dr=+DATA.rain.drain||0, C=terrClass(sk), D=dr*C.k, Sc=dr*C.sc, dt=STEP_MIN/60;
   const out=new Float32Array(STEPS+1); out.past=new Float32Array(7);
   let S=0;
+  if(DATA.mode==='real'){   // 予測：基準時刻より前の雨量は使わない。基準時刻の雨量が降り続くと仮定し、基準時刻(貯留0)から積み上げる
+    for(let t=1;t<=STEPS;t++){ S=Math.max(0,S+(rv(r.fc[t])-D)*dt); out[t]=Math.max(0,S-Sc); }
+    return out;
+  }
   const seq=[...(r.pre||new Float32Array(PRE_N)),...r.obs];   // シミュレーションは3〜6時間前は雨なし（3時間前から降り始め）
   for(let k=1;k<seq.length;k++){ S=Math.max(0,S+(rv(seq[k])-D)*dt); if(k>=PRE_N) out.past[k-PRE_N]=Math.max(0,S-Sc); }
   out[0]=Math.max(0,S-Sc);
