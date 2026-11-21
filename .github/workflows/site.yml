@@ -31,13 +31,14 @@ jobs:
         run: |
           if [ -z "$PAGE_PASSWORD" ]; then echo "PAGE_PASSWORD が未設定です。パスワードなしでは公開しません。"; exit 1; fi
           mkdir -p _site
-          npx -y staticrypt@3 index.html -p "$PAGE_PASSWORD" -d _site \
+          npx -y staticrypt@3 index.html -p "$PAGE_PASSWORD" -d _site --short \
             --template-title "浸水予測AIイメージ（関係者限り）" \
             --template-instructions "関係者に共有されたパスワードを入力してください" \
             --template-button "開く"
           cp -r data _site/data
           cp robots.txt _site/robots.txt
           touch _site/.nojekyll
+          test -f _site/index.html
            ls -laR _site
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
