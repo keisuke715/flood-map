@@ -329,6 +329,7 @@ const KC_REF_KM2 = 50;           // 河川の越水位の基準流域面積[km²
 const JMA_AMEDAS = 'https://www.jma.go.jp/bosai/amedas/';
 const JMA_TILE = 'https://www.jma.go.jp/bosai/jmatile/data/';
 const RAIN_PROXY = '';           // ブラウザから直接取得できない場合に、中継サーバのURL接頭辞を設定する（例 'https://xxx.workers.dev/?url='）
+const CSV_PREF = {fukuoka:'82',saga:'85',nagasaki:'84',kumamoto:'86',oita:'83',ooita:'83',miyazaki:'87',kagoshima:'88'};   // CSVのファイル名の県名→アメダス観測所番号の先頭2桁
 const CSV_URL = 'data/obs/';         // 自分で保存した観測所の時間雨量CSV（data/obs/YYYYMM.csv）。気象庁の配信期間より古い時刻に使う
 const RAIN_TILE_Z = 8;           // 降水タイルのズーム（約500m/画素）
 const IDW_RADIUS = 40000;        // 観測所の補間に使う最大距離[m]
