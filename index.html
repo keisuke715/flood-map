@@ -190,7 +190,7 @@ body[data-view="river"] [data-v]:not([data-v~="river"]){display:none!important}
       <div class="offline" id="offline">地図を読み込めませんでした。<br>この画面はインターネット接続（地理院タイル・地図ライブラリの取得）が必要です。<br>右側のパネルはダミーデータで動作します。</div>
     </div>
     <div class="timebar">
-      <button id="playBtn">▶ 再生</button>
+      <button id="playBtn">▶ 予測</button>
       <input id="slider" type="range" min="0" max="12" step="1" value="0">
       <div class="timelabel" id="timeLabel"></div>
     </div>
@@ -664,7 +664,7 @@ function parseRainCsv(text){   // → [{name,lat,lon,t,mm}]
 }
 async function loadCsvObs(now){
   const ym=t=>{ const j=new Date(t+9*3600e3); return ''+j.getUTCFullYear()+p2(j.getUTCMonth()+1); };
-  const need=[...new Set([now.getTime()-7*3600e3,now.getTime(),now.getTime()+STEPS*STEP_MIN*60000].map(ym))];
+  const need=[...new Set([now.getTime()-7*3600e3,now.getTime()].map(ym))];
   // ファイル名：YYYYMM_県名(英字).csv（例 202610_fukuoka.csv）。県ごとに別ファイルでよい。YYYYMM.csv（県をまとめた1本）も読む
   const tasks=[]; for(const m of need){ tasks.push([m,'',m+'.csv']); for(const k in CSV_PREF) tasks.push([m,k,m+'_'+k+'.csv']); }
   let recs=[], got=0;
@@ -682,13 +682,12 @@ async function loadCsvObs(now){
     const k=lo.toFixed(4)+','+la.toFixed(4); if(!byS.has(k)) byS.set(k,{name:r.name,lo,la,v:new Map()}); byS.get(k).v.set(r.t,r.mm); }
   const B={west:AREA.west-0.5,east:AREA.east+0.5,south:AREA.south-0.4,north:AREA.north+0.4}, T=now.getTime(), HR=3600e3;
   const val=(m,t)=>{ if(m.has(t)) return m.get(t); const a=m.get(t-HR/2), b=m.get(t+HR/2); return a!==undefined&&b!==undefined?(a+b)/2:(a!==undefined?a:(b!==undefined?b:NaN)); };   // 時間値を30分刻みに補間
-  const st={n:0,lng:[],lat:[],obs:[],pre:[],fc:[],names:[]};
+  const st={n:0,lng:[],lat:[],obs:[],pre:[],names:[]};
   for(const s of byS.values()){ if(s.lo<B.west||s.lo>B.east||s.la<B.south||s.la>B.north) continue;
-    const o=new Float32Array(7), f=new Float32Array(STEPS+1), pr=new Float32Array(PRE_N); let any=false;
+    const o=new Float32Array(7), pr=new Float32Array(PRE_N); let any=false;
     for(let i=0;i<PRE_N;i++) pr[i]=val(s.v,T-(2*PRE_N-i)*STEP_MIN*60000);
     for(let i=0;i<7;i++){ o[i]=val(s.v,T-(6-i)*STEP_MIN*60000); if(o[i]>=0) any=true; }
-    for(let k=0;k<=STEPS;k++) f[k]=val(s.v,T+k*STEP_MIN*60000);
-    if(any){ st.n++; st.lng.push(s.lo); st.lat.push(s.la); st.obs.push(o); st.pre.push(pr); st.fc.push(f); st.names.push(s.name); } }
+    if(any){ st.n++; st.lng.push(s.lo); st.lat.push(s.la); st.obs.push(o); st.pre.push(pr); st.names.push(s.name); } }
   if(!st.n) throw new Error('対象エリア周辺で、その時刻の保存データがある観測所がありません'+(miss.size?`（座標不明：${[...miss].slice(0,3).join('、')}。緯度・経度の列を足してください）`:''));
   RAIN.st=st; RAIN.obsTime=new Date(T);
   RAIN.status.obs=`保存データ（CSV）${st.n}地点／基準 ${hhmmOf(RAIN.obsTime)}`+(miss.size?`／座標不明で除外 ${miss.size}地点`:'');
@@ -713,33 +712,23 @@ async function tileSet(e,tl){
   return {m,ok,ng,err,mx};
 }
 const nearestEntry=(arr,tgt,tol)=>{ let best=null,bd=Infinity; for(const e of arr){ const d=Math.abs(parseJmaUtc(e.validtime)-tgt); if(d<bd){bd=d;best=e;} } return best&&bd<=tol?best:null; };
-async function loadFc(now){
+async function loadFc(now){   // 解析雨量（実況）のみ読む。先の雨量は読まず、基準時刻の雨量が継続するものとして計算する
   const list=await jget(JMA_TILE+'rasrf/targetTimes.json'), isR=e=>!e.elements||e.elements.includes('rasrf');
-  const an=list.filter(e=>e.validtime===e.basetime&&isR(e));                 // 解析雨量（実況）
-  let fl=list.filter(e=>e.validtime>e.basetime&&isR(e));                      // 予報
-  if(RAIN.asOf){ const lim=jstStampUtc(now); fl=fl.filter(e=>e.basetime<=lim); }   // 基準時刻以前に発表された予報のみ
-  const B=fl.length?fl.reduce((m,e)=>e.basetime>m?e.basetime:m,'0'):null, ent=fl.filter(e=>e.basetime===B);
-  const fsteps=[null], asteps=[], psteps=[], kinds=[]; let nAct=0;
-  for(let k=1;k<=STEPS;k++){
-    const tgt=now.getTime()+k*STEP_MIN*60000;
-    let e=B?nearestEntry(ent,tgt,20*60000):null, kind='f';
-    if(!e){ e=nearestEntry(an,tgt,10*60000); kind='a'; }                     // 予報が無い時刻は解析雨量（実績）で補う
-    fsteps[k]=e; kinds[k]=kind; if(e&&kind==='a') nAct++;
-  }
+  const an=list.filter(e=>e.validtime===e.basetime&&isR(e));
+  const asteps=[], psteps=[];
   for(let i=0;i<7;i++) asteps[i]=nearestEntry(an,now.getTime()-(6-i)*STEP_MIN*60000,10*60000);
   for(let i=0;i<PRE_N;i++) psteps[i]=nearestEntry(an,now.getTime()-(2*PRE_N-i)*STEP_MIN*60000,10*60000);   // 3〜6時間前（内水の貯留計算用）
   const Z=RAIN_TILE_Z, [gx0,gy0]=mercPx(AREA.west,AREA.north,Z), [gx1,gy1]=mercPx(AREA.east,AREA.south,Z), tl=[];
   for(let ty=Math.floor(gy0/256);ty<=Math.floor(gy1/256);ty++) for(let tx=Math.floor(gx0/256);tx<=Math.floor(gx1/256);tx++) tl.push([tx,ty]);
-  if(!fsteps.some(Boolean)&&!asteps.some(Boolean)) throw new Error(RAIN.asOf?'この時刻の雨量タイルは配信されていません（配信は直近約1日分）':'雨量タイルの時刻情報がありません');
-  const outF=[null], outA=[], outP=[]; let okN=0,ngN=0,lastErr='',mx=0,nF=0,nA=0;
+  if(!asteps.some(Boolean)&&!psteps.some(Boolean)) throw new Error(RAIN.asOf?'この時刻の解析雨量タイルは配信されていません（配信は直近約1日分）':'雨量タイルの時刻情報がありません');
+  const outA=[], outP=[]; let okN=0,ngN=0,lastErr='',mx=0,nA=0;
   const run=async(e,put,cnt)=>{ if(!e) return; const r=await tileSet(e,tl); put(r.m); okN+=r.ok; ngN+=r.ng; if(r.err) lastErr=r.err; if(r.mx>mx) mx=r.mx; if(r.ok) cnt(); };
   await Promise.all([
-    ...fsteps.map((e,k)=>k?run(e,m=>{outF[k]=m;},()=>{ if(kinds[k]==='f') nF++; }):null),
     ...asteps.map((e,i)=>run(e,m=>{outA[i]=m;},()=>{nA++;})),
     ...psteps.map((e,i)=>run(e,m=>{outP[i]=m;},()=>{}))]);
   if(!okN) throw new Error('降水タイルを取得できません（'+(lastErr||'時刻が合いません')+'）');
-  RAIN.fc={steps:outF}; RAIN.an={steps:outA,pre:outP}; RAIN.fcBase=B?new Date(parseJmaUtc(B)):null;
-  RAIN.status.fc=`解析雨量 ${nA}/7時点・予報 ${nF}/${STEPS}時点${B?`（基準 ${hhmmOf(RAIN.fcBase)}）`:''}${nAct?`・実績で補完 ${nAct}時点`:''}／最大 ${mx}mm/h`+(mx===0?'（対象エリアに雨はありません）':'')+(ngN?`／一部取得失敗${ngN}件`:'');
+  RAIN.fc=null; RAIN.an={steps:outA,pre:outP}; RAIN.fcBase=null;
+  RAIN.status.fc=`解析雨量 ${nA}/7時点／先の雨量は基準時刻の雨量が継続するものとして予測／最大 ${mx}mm/h`+(mx===0?'（対象エリアに雨はありません）':'')+(ngN?`／一部取得失敗${ngN}件`:'');
 }
 async function refreshRain(){
   if(DATA.mode!=='real') return;
@@ -750,7 +739,7 @@ async function refreshRain(){
     if(RAIN.asOf){ try{ await loadCsvObs(new Date(Math.floor(RAIN.asOf.getTime()/1800000)*1800000)); have=true; }catch(e){ csvErr=e.message; RAIN.st=null; } }   // 指定時刻は、自分で保存したCSVを優先
     if(!have){ try{ await loadObs(); }catch(e){ RAIN.st=null; RAIN.status.obs='観測の取得に失敗：'+e.message+(csvErr?'／'+csvErr:''); } }
     const now=RAIN.obsTime||(RAIN.asOf?new Date(Math.floor(RAIN.asOf.getTime()/600000)*600000):new Date(Math.floor(Date.now()/600000)*600000));
-    try{ await loadFc(now); }catch(e){ RAIN.fc=null; RAIN.an=null; RAIN.status.fc='雨量タイルの取得に失敗：'+e.message+(RAIN.st&&RAIN.st.fc?'（保存データの実績雨量で補完）':'（雨量は0として計算）'); }
+    try{ await loadFc(now); }catch(e){ RAIN.fc=null; RAIN.an=null; RAIN.status.fc='解析雨量タイルなし：'+e.message+(RAIN.st?'（観測所の値で計算。先の雨量は基準時刻の雨量が継続するものとして予測）':'（雨量は0として計算）'); }
     base=new Date(now); base.setSeconds(0,0);
     RAIN.updated=new Date(); syncAsOfUI(); updateRainStatus();
     if(DATA.mode==='real'&&!RAIN.again) onDataChange(false);
@@ -790,12 +779,10 @@ function simSeries(){   // シミュレーション：現在（と直近3時間�
 }
 function rainAtPoint(lng,lat){   // 地点の雨量 {obs[7], fc[13]} [mm/h]
   if(DATA.mode==='sim') return inSelected(lng,lat)?simSeries():ZERO_RAIN();   // シミュレーションは選択した市町村内だけに降らせる
-  const obs=idw(lng,lat), fc=fcAt(lng,lat), pre=idw(lng,lat,'pre',PRE_N);
+  const obs=idw(lng,lat), pre=idw(lng,lat,'pre',PRE_N);
   if(RAIN.an){ for(let i=0;i<7;i++){ const v=tileVal(RAIN.an.steps[i],lng,lat); if(v!==undefined) obs[i]=v; }
     if(RAIN.an.pre) for(let i=0;i<PRE_N;i++){ const v=tileVal(RAIN.an.pre[i],lng,lat); if(v!==undefined) pre[i]=v; } }   // 解析雨量（レーダー＋アメダス）を優先
-  if(RAIN.st&&RAIN.st.fc){   // 予報タイルが無い時刻は、保存したCSVの実績雨量で補う
-    let alt=null; for(let k=1;k<=STEPS;k++){ if(RAIN.fc&&RAIN.fc.steps[k]) continue; if(!alt) alt=idw(lng,lat,'fc',STEPS+1); fc[k]=alt[k]; }
-  }
+  const fc=new Float32Array(STEPS+1).fill(obs[6]);   // 予測：基準時刻の雨量が継続するものとして、貯留モデルで浸水深を計算する
   fc[0]=obs[6]; return {obs,fc,pre};
 }
 // 内水判定（貯留モデル）：雨量から地形ごとの排水能力D[mm/h]を引いた分を、基準の6時間前から貯める（雨が弱まれば排水で減る）。
@@ -874,6 +861,7 @@ function floodDepth(lng,lat,t,offset=0,pond=0,ex){
 }
 function facilitySummary(f){
   const ex=pointExc(f.lng,f.lat), depths=[]; for(let t=0;t<=STEPS;t++) depths.push(floodDepth(f.lng,f.lat,t,+f.offset||0,+f.pond||0,ex));
+  if(DATA.mode==='real') depths[0]=0;   // 気象庁データ：基準時刻は雨量のみ（浸水深は予測の時刻だけ）
   const arrive=depths.findIndex(d=>d>=0.1), max=Math.max(...depths), maxT=depths.indexOf(max);
   return {depths,arrive,max,maxT,risk:max>=3?'高':max>=0.5?'中':max>=0.1?'低':'なし'};
 }
@@ -899,6 +887,7 @@ function buildMesh(){
 }
 function floodGeoJSON(t){
   const features=[], dec=corrDecay(t);
+  if(DATA.mode==='real'&&t===0) return {type:'FeatureCollection',features};   // 気象庁データ：基準時刻は雨量のみ（浸水深は予測の時刻だけ表示）
   for(const m of MESH){
     const d=Math.max(0, baseDepth(m.k,m.hand,m.sk,m.ex,t)+m.corr*dec); if(d<0.05) continue;
     features.push({type:'Feature',properties:{depth:+d.toFixed(2),cls:d<0.5?1:d<3?2:3},geometry:{type:'Polygon',coordinates:[m.ring]}});
@@ -927,6 +916,7 @@ function updateSensor(s){
     s.readings[i]=Math.round(Math.max(0,H-m.hand,innerDepth(m.sk,m.ex?m.ex.past[i]:0,0))*100);
   }
   s.readings[6]=s.pred[0];
+  if(DATA.mode==='real'){ s.pred[0]=0; s.readings.fill(0); }   // 気象庁データ：基準時刻と過去は雨量のみ
 }
 // 入力変更時の再計算
 let summaries={};
@@ -948,7 +938,8 @@ const after=t=>t===0?'現在':`+${Math.floor(t/2)}時間${t%2?'30分':''}`.repla
 const RISK_COLOR={'高':'var(--lv3)','中':'var(--lv2)','低':'var(--lv1)','なし':'#8a97a3'};
 const TYPES={substation:['変','変電所'],parking:['P','車両待機場所'],warehouse:['資','資材拠点'],road:['道','道路・アンダーパス'],underpass:['潜','アンダーパス（掘込み）'],tower:['塔','送電設備'],safe:['高','退避先'],other:['他','その他']};
 const arriveText=s=>s.arrive<0?'6h以内なし':s.arrive===0?'浸水中':`${after(s.arrive)}（${hhmm(s.arrive)}）`;
-let cur=0, selected=null, timer=null;   // selected={kind:'fac'|'sen', id}
+let cur=0, selected=null, timer=null;
+const rainOnly=()=>DATA.mode==='real'&&cur===0;   // 気象庁データの基準時刻（0h）は雨量だけを表示   // selected={kind:'fac'|'sen', id}
 
 /* =========================================================
    地図（MapLibre GL JS＋地理院タイル＋標高）
@@ -1049,12 +1040,12 @@ function rebuildMarkers(){
 function refreshMarkers(){
   if(!mapReady) return;
   DATA.facilities.forEach(f=>{ const m=markers['fac:'+f.id]; if(!m||!summaries[f.id]) return;
-    const d=summaries[f.id].depths[cur];
+    const d=rainOnly()?0:summaries[f.id].depths[cur];
     m.el.classList.toggle('wet',d>=0.1); m.el.classList.toggle('sel',selected&&selected.kind==='fac'&&selected.id===f.id);
     m.nm.textContent=f.name+(d>=0.1?` ${d.toFixed(1)}m`:''); });
   DATA.sensors.forEach(s=>{ const m=markers['sen:'+s.id]; if(!m) return;
-    const v=(s.pred&&s.pred[cur])||0;
-    m.dia.style.background=sensorColor(v); m.val.textContent=`${s.name.replace(/^冠水センサ\s*/,'')} ${v}cm`;
+    const v=(s.pred&&s.pred[cur])||0, nm=s.name.replace(/^冠水センサ\s*/,'');
+    m.dia.style.background=sensorColor(rainOnly()?0:v); m.val.textContent=rainOnly()?`${nm} —`:`${nm} ${v}cm`;
     m.el.classList.toggle('sel',selected&&selected.kind==='sen'&&selected.id===s.id); });
 }
 function drawFlood(t){ if(!mapReady) return; map.getSource('flood').setData(floodGeoJSON(t)); if(rainOn) map.getSource('rain').setData(rainGeoJSON(t)); refreshMarkers(); }
@@ -1115,7 +1106,7 @@ function pointHTML(){
   if(!inGrid(lng,lat)) return `<b>${esc(title)}</b><br><span style="color:#5b6b7a">予測範囲外の地点です</span>`;
   const s=facilitySummary({lng,lat,offset:0,pond:0}), now=s.depths[cur];
   return `<b>${esc(title)}</b><table class="ptinfo">
-    <tr><td>${hhmm(cur)}の浸水深</td><td><b>${now<0.1?'浸水なし':now.toFixed(2)+'m'}</b></td></tr>
+    <tr><td>${hhmm(cur)}の浸水深</td><td><b>${rainOnly()?'—（雨量のみ表示）':now<0.1?'浸水なし':now.toFixed(2)+'m'}</b></td></tr>
     <tr><td>最大浸水深</td><td>${s.max<0.1?'浸水なし':s.max.toFixed(2)+'m（'+hhmm(s.maxT)+'頃）'}</td></tr>
     <tr><td>浸水到達予測</td><td>${arriveText(s)}</td></tr>
     <tr><td>リスク</td><td><span class="risk" style="background:${RISK_COLOR[s.risk]}">${s.risk}</span></td></tr>
@@ -1210,7 +1201,7 @@ function select(kind,id,fly=false){
     const f=DATA.facilities.find(x=>x.id===id); if(!f) return closeDetail(); const s=summaries[id], now=s.depths[cur];
     det.innerHTML=`<button class="close" onclick="closeDetail()">×</button><h3>${esc(f.name)}</h3><table>
       <tr><td>ID・種別</td><td>${esc(f.id)}／${(TYPES[f.type]||TYPES.other)[1]}</td></tr>
-      <tr><td>${hhmm(cur)}の浸水深</td><td><b>${now<0.1?'浸水なし':now.toFixed(2)+'m'}</b></td></tr>
+      <tr><td>${hhmm(cur)}の浸水深</td><td><b>${rainOnly()?'—（雨量のみ表示）':now<0.1?'浸水なし':now.toFixed(2)+'m'}</b></td></tr>
       <tr><td>最大浸水深</td><td>${s.max<0.1?'浸水なし':s.max.toFixed(2)+'m（'+hhmm(s.maxT)+'頃）'}</td></tr>
       <tr><td>浸水到達予測</td><td>${arriveText(s)}</td></tr>
       <tr><td>リスク</td><td><span class="risk" style="background:${RISK_COLOR[s.risk]}">${s.risk}</span></td></tr>
@@ -1221,8 +1212,8 @@ function select(kind,id,fly=false){
     const s=DATA.sensors.find(x=>x.id===id); if(!s) return closeDetail(); const v=(s.pred&&s.pred[cur])||0;
     det.innerHTML=`<button class="close" onclick="closeDetail()">×</button><h3>◆ ${esc(s.name)}</h3><table>
       <tr><td>ID</td><td>${esc(s.id)}</td></tr>
-      <tr><td>${hhmm(cur)}の浸水深</td><td><b style="color:${sensorColor(v)}">${v}cm</b>（地図の浸水深と同値）</td></tr>
-      <tr><td>3時間前〜現在の推移</td><td>${sensorTrend(s)}<br><span style="font-size:10px;color:#8a97a3">${s.readings.join(' → ')} cm</span></td></tr>
+      <tr><td>${hhmm(cur)}の浸水深</td><td>${rainOnly()?'<b>—</b>（雨量のみ表示）':`<b style="color:${sensorColor(v)}">${v}cm</b>（地図の浸水深と同値）`}</td></tr>
+      ${DATA.mode==='real'?'':`<tr><td>3時間前〜現在の推移</td><td>${sensorTrend(s)}<br><span style="font-size:10px;color:#8a97a3">${s.readings.join(' → ')} cm</span></td></tr>`}
       <tr><td>備考</td><td>${esc(s.note)||'—'}</td></tr></table>
       <div class="tool" style="margin-top:8px"><button class="btn" onclick="openForm('sen','${esc(s.id)}')">編集</button></div>`;
     if(fly&&mapReady) map.flyTo({center:[s.lng,s.lat],zoom:15.5,pitch:55,duration:800});
@@ -1562,7 +1553,7 @@ function refreshAll(){ recalc(); renderDataLists(); update(cur); }
 function update(t){
   cur=t; $('slider').value=t;
   drawFlood(t); drawChart(t); drawList();
-  $('timeLabel').textContent=`${after(t)}（${hhmm(t)}）`; $('targetClock').textContent=hhmm(t);
+  $('timeLabel').textContent=`${after(t)}（${hhmm(t)}）`+(rainOnly()?'：雨量のみ':''); $('targetClock').textContent=hhmm(t);
   const a=alertLevel(FC_LEVEL[t]), mx=Math.max(...FC_LEVEL), peak=FC_LEVEL.indexOf(mx);
   $('alert').style.background=a.color;
   $('alert').innerHTML=`警戒レベル：${a.text}<small>水位 ${FC_LEVEL[t].toFixed(1)}m ／ ピーク ${mx.toFixed(1)}m（${hhmm(peak)}頃）</small>`;
@@ -1570,7 +1561,7 @@ function update(t){
   refreshPoint();
 }
 $('slider').oninput=e=>update(+e.target.value);
-$('playBtn').onclick=()=>{ if(timer){clearInterval(timer);timer=null;$('playBtn').textContent='▶ 再生';return;}
+$('playBtn').onclick=()=>{ if(timer){clearInterval(timer);timer=null;$('playBtn').textContent='▶ 予測';return;}
   $('playBtn').textContent='■ 停止'; timer=setInterval(()=>update(cur>=STEPS?0:cur+1),1000); };
 $('ticks').innerHTML=[0,2,4,6,8,10,12].map(t=>`<span>${after(t)}</span>`).join('');
 setInterval(()=>$('nowClock').textContent=new Date().toLocaleTimeString('ja-JP'),1000);
