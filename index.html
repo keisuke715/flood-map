@@ -737,15 +737,20 @@ async function loadFc(now){
   RAIN.status.fc=`解析雨量 ${nA}/7時点・予報 ${nF}/${STEPS}時点${B?`（基準 ${hhmmOf(RAIN.fcBase)}）`:''}${nAct?`・実績で補完 ${nAct}時点`:''}／最大 ${mx}mm/h`+(mx===0?'（対象エリアに雨はありません）':'')+(ngN?`／一部取得失敗${ngN}件`:'');
 }
 async function refreshRain(){
-  if(DATA.mode!=='real'||rainBusy) return; rainBusy=true; RAIN.status.obs='取得中…'; RAIN.status.fc='取得中…'; updateRainStatus();
-  let csvErr='', have=false;
-  if(RAIN.asOf){ try{ await loadCsvObs(new Date(Math.floor(RAIN.asOf.getTime()/1800000)*1800000)); have=true; }catch(e){ csvErr=e.message; RAIN.st=null; } }   // 指定時刻は、自分で保存したCSVを優先
-  if(!have){ try{ await loadObs(); }catch(e){ RAIN.st=null; RAIN.status.obs='観測の取得に失敗：'+e.message+(csvErr?'／'+csvErr:''); } }
-  const now=RAIN.obsTime||(RAIN.asOf?new Date(Math.floor(RAIN.asOf.getTime()/600000)*600000):new Date(Math.floor(Date.now()/600000)*600000));
-  try{ await loadFc(now); }catch(e){ RAIN.fc=null; RAIN.an=null; RAIN.status.fc='雨量タイルの取得に失敗：'+e.message+(RAIN.st&&RAIN.st.fc?'（保存データの実績雨量で補完）':'（雨量は0として計算）'); }
-  base=new Date(now); base.setSeconds(0,0);
-  rainBusy=false; RAIN.updated=new Date(); syncAsOfUI(); updateRainStatus();
-  if(DATA.mode==='real') onDataChange(false);
+  if(DATA.mode!=='real') return;
+  if(rainBusy){ RAIN.again=true; return; }   // 取得中に基準時刻が変わったら、終わった後で最新の指定でやり直す
+  rainBusy=true; RAIN.again=false; RAIN.status.obs='取得中…'; RAIN.status.fc='取得中…'; updateRainStatus();
+  try{
+    let csvErr='', have=false;
+    if(RAIN.asOf){ try{ await loadCsvObs(new Date(Math.floor(RAIN.asOf.getTime()/1800000)*1800000)); have=true; }catch(e){ csvErr=e.message; RAIN.st=null; } }   // 指定時刻は、自分で保存したCSVを優先
+    if(!have){ try{ await loadObs(); }catch(e){ RAIN.st=null; RAIN.status.obs='観測の取得に失敗：'+e.message+(csvErr?'／'+csvErr:''); } }
+    const now=RAIN.obsTime||(RAIN.asOf?new Date(Math.floor(RAIN.asOf.getTime()/600000)*600000):new Date(Math.floor(Date.now()/600000)*600000));
+    try{ await loadFc(now); }catch(e){ RAIN.fc=null; RAIN.an=null; RAIN.status.fc='雨量タイルの取得に失敗：'+e.message+(RAIN.st&&RAIN.st.fc?'（保存データの実績雨量で補完）':'（雨量は0として計算）'); }
+    base=new Date(now); base.setSeconds(0,0);
+    RAIN.updated=new Date(); syncAsOfUI(); updateRainStatus();
+    if(DATA.mode==='real'&&!RAIN.again) onDataChange(false);
+  } finally { rainBusy=false; }
+  if(RAIN.again){ RAIN.again=false; refreshRain(); }
 }
 // 観測所の逆距離加重補間（最寄り4地点）
 function idw(lng,lat,key='obs',len=7){
