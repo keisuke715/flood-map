@@ -157,7 +157,7 @@ body[data-view="river"] [data-v]:not([data-v~="river"]){display:none!important}
       <span class="sep"></span>
       標高の強調：<input id="exag" type="range" min="1" max="8" step="1" value="4" style="width:90px"><span id="exagVal">4倍</span>
       <span class="sep"></span>
-      <button id="sinkBtn">くぼ地を表示 OFF</button><button id="rainBtn">降水量メッシュ OFF</button>
+      <button id="sinkBtn">くぼ地を表示 OFF</button><button id="rainBtn">降水量メッシュ OFF</button><button id="facBtn" class="on">施設表示 ON</button><button id="senBtn" class="on">センサ表示 ON</button>
     </div>
     <div class="row2">
       移動：<select id="spot"><option value="">地点を選択</option></select>
@@ -223,7 +223,7 @@ body[data-view="river"] [data-v]:not([data-v~="river"]){display:none!important}
     <div class="card" data-v="real sim admin">
       <h2>データ管理</h2>
       <div class="tool" data-v="real">基準時刻は画面上部で指定します。<button class="btn" id="rainRefresh">今すぐ更新</button></div>
-      <div class="tool" data-v="real sim">排水能力：<input id="drain" type="number" min="0" max="100" step="5" style="width:60px">mm/h<span class="note" style="margin:0 0 0 6px">（両モード共通）</span></div>
+      <div class="tool" data-v="real sim">排水能力（平地）：<input id="drain" type="number" min="0" max="100" step="5" style="width:60px">mm/h<span class="note" style="margin:0 0 0 6px">（両モード共通。深いくぼ地は1/6・くぼ地は0.2倍・浅いくぼ地は0.3倍で自動換算）</span></div>
       <div class="note" id="rainStatus" data-v="real sim" style="margin:0 0 8px"></div>
       <div class="tabs">
         <button data-tab="rain" data-v="sim" class="on">シミュレーション</button><button data-tab="area" data-v="real sim">対象エリア</button><button data-tab="fac" data-v="admin">対象施設</button><button data-tab="sen" data-v="admin">冠水センサ</button><button data-tab="riv" data-v="admin">河川管理</button><button data-tab="io" data-v="admin">保存・読込</button>
@@ -321,6 +321,9 @@ const DEM_MAX_CELLS = 2.5e6;     // 解析ラスタのセル数の上限（超�
 const MESH_MIN = 40, MESH_MAX_CELLS = 30000;   // 浸水メッシュの最小サイズ[m]・最大セル数
 const SINK_MIN = 0.05;           // くぼ地とみなす最小の深さ[m]
 const SINK_CAP = 4;              // くぼ地に溜まる水位の上限[m]（盛土背後の過大評価を防ぐ）
+const PRE_N = 6;                 // 基準時刻の3時間前よりさらに前（3〜6時間前）の雨量の点数（30分刻み）
+const TERR = [{k:1/6,sc:1/3,label:'深いくぼ地（アンダーパス級）'},{k:0.2,sc:1/2,label:'くぼ地'},{k:0.3,sc:2/3,label:'浅いくぼ地'},{k:1,sc:1,label:'平地'}];   // 地形ごとの排水能力・許容貯留量（排水能力「平地」を基準にした比）
+const FLAT_MAX_DEPTH = 0.2;      // 平地の道路冠水の上限[m]（仮）
 const INNER_GAIN = 1.5;          // 内水の溜まりやすさ（周囲からの集水の仮係数）
 const UNDERPASS_R = 30;          // アンダーパスの既定の範囲半径[m]
 const CHANNEL_KM2 = 2;           // 流域面積がこれ以上のセルを「河道」とみなす[km²]
@@ -370,7 +373,7 @@ function muniHas(u,x,y){
 const DEFAULT_DATA = {
   mode:'real',                                  // 'real'＝実況（気象庁）／'sim'＝シミュレーション
   area:{ codes:['40130'] },                     // 対象市町村（JIS5桁。政令市は市のコード）
-  rain:{ fc:[44,50,46,38,30,22,15,10,6,4,2,1,0], mult:1, drain:20, level0:4.3 },   // シミュレーション用の降水量・排水能力（共通）
+  rain:{ fc:[44,50,46,38,30,22,15,10,6,4,2,1,0], mult:1, drain:30, level0:4.3 },   // シミュレーション用の降水量・排水能力（共通）
   rivers:[                                      // 対象河川（管理画面の「河川管理」で編集）
     {id:'R-001',name:'那珂川',note:'那珂川水系（福岡市）'},
     {id:'R-002',name:'御笠川',note:'御笠川水系（福岡市・春日市・大野城市）'},
@@ -410,7 +413,7 @@ function normalizeData(d){
   if(!Array.isArray(d.rain.fc)) d.rain.fc=DEFAULT_DATA.rain.fc.slice();
   if(d.rain.level0===undefined) d.rain.level0=SIM_OBS_LEVEL[6];
   if(!(d.rain.mult>0)) d.rain.mult=1;
-  if(!(d.rain.drain>=0)) d.rain.drain=20;
+  if(!(d.rain.drain>=0)||d.rain.drain===20) d.rain.drain=30;   // 20は旧初期値→新初期値30（平地の排水能力）
   return d;
 }
 let DATA=loadData();
@@ -614,18 +617,18 @@ async function loadObs(){
   let latest=newest;
   if(RAIN.asOf){ latest=new Date(Math.floor(Math.min(RAIN.asOf.getTime(),newest.getTime())/600000)*600000); }
   if(!AMEDAS_TABLE) AMEDAS_TABLE=await jget(JMA_AMEDAS+'const/amedastable.json');
-  const maps=await Promise.all([...Array(7)].map((_,i)=>jget(JMA_AMEDAS+'data/map/'+jstStamp(new Date(latest.getTime()-(6-i)*STEP_MIN*60000))+'.json').catch(()=>null)));
-  if(!maps[6]) throw new Error(RAIN.asOf?'この時刻の観測値がありません（保存期間外の可能性）':'最新時刻の観測値を取得できません');
-  const B={west:AREA.west-0.5,east:AREA.east+0.5,south:AREA.south-0.4,north:AREA.north+0.4}, lng=[], lat=[], obs=[], names=[];
+  const maps=await Promise.all([...Array(PRE_N+7)].map((_,i)=>jget(JMA_AMEDAS+'data/map/'+jstStamp(new Date(latest.getTime()-(PRE_N+6-i)*STEP_MIN*60000))+'.json').catch(()=>null)));   // 先頭PRE_N点＝3〜6時間前
+  if(!maps[PRE_N+6]) throw new Error(RAIN.asOf?'この時刻の観測値がありません（保存期間外の可能性）':'最新時刻の観測値を取得できません');
+  const B={west:AREA.west-0.5,east:AREA.east+0.5,south:AREA.south-0.4,north:AREA.north+0.4}, lng=[], lat=[], obs=[], pres=[], names=[];
   for(const id in AMEDAS_TABLE){
     const s=AMEDAS_TABLE[id]; if(!s.lat||!s.lon) continue;
     const la=s.lat[0]+s.lat[1]/60, lo=s.lon[0]+s.lon[1]/60; if(lo<B.west||lo>B.east||la<B.south||la>B.north) continue;
-    const o=new Float32Array(7).fill(NaN); let any=false;
-    maps.forEach((m,i)=>{ const v=m&&m[id]&&m[id].precipitation1h; if(v&&typeof v[0]==='number'){ o[i]=v[0]; any=true; } });
-    if(any){ lng.push(lo); lat.push(la); obs.push(o); names.push(s.kjName||id); }
+    const o=new Float32Array(7).fill(NaN), pr=new Float32Array(PRE_N).fill(NaN); let any=false;
+    maps.forEach((m,i)=>{ const v=m&&m[id]&&m[id].precipitation1h; if(v&&typeof v[0]==='number'){ if(i<PRE_N) pr[i]=v[0]; else{ o[i-PRE_N]=v[0]; any=true; } } });
+    if(any){ lng.push(lo); lat.push(la); obs.push(o); pres.push(pr); names.push(s.kjName||id); }
   }
   if(!obs.length) throw new Error('対象エリア周辺に雨量の観測所がありません');
-  RAIN.st={n:obs.length,lng,lat,obs,names}; RAIN.obsTime=latest;
+  RAIN.st={n:obs.length,lng,lat,obs,pre:pres,names}; RAIN.obsTime=latest;
   RAIN.status.obs=`アメダス${obs.length}地点／観測 ${hhmmOf(latest)}`;
 }
 const jstStampUtc=d=>{ const j=new Date(d.getTime()); return ''+j.getUTCFullYear()+p2(j.getUTCMonth()+1)+p2(j.getUTCDate())+p2(j.getUTCHours())+p2(j.getUTCMinutes())+'00'; };   // 気象庁タイルの時刻はUTC
@@ -662,7 +665,7 @@ function parseRainCsv(text){   // → [{name,lat,lon,t,mm}]
 }
 async function loadCsvObs(now){
   const ym=t=>{ const j=new Date(t+9*3600e3); return ''+j.getUTCFullYear()+p2(j.getUTCMonth()+1); };
-  const need=[...new Set([now.getTime()-3*3600e3,now.getTime(),now.getTime()+STEPS*STEP_MIN*60000].map(ym))];
+  const need=[...new Set([now.getTime()-7*3600e3,now.getTime(),now.getTime()+STEPS*STEP_MIN*60000].map(ym))];
   // ファイル名：YYYYMM_県名(英字).csv（例 202610_fukuoka.csv）。県ごとに別ファイルでよい。YYYYMM.csv（県をまとめた1本）も読む
   const tasks=[]; for(const m of need){ tasks.push([m,'',m+'.csv']); for(const k in CSV_PREF) tasks.push([m,k,m+'_'+k+'.csv']); }
   let recs=[], got=0;
@@ -680,12 +683,13 @@ async function loadCsvObs(now){
     const k=lo.toFixed(4)+','+la.toFixed(4); if(!byS.has(k)) byS.set(k,{name:r.name,lo,la,v:new Map()}); byS.get(k).v.set(r.t,r.mm); }
   const B={west:AREA.west-0.5,east:AREA.east+0.5,south:AREA.south-0.4,north:AREA.north+0.4}, T=now.getTime(), HR=3600e3;
   const val=(m,t)=>{ if(m.has(t)) return m.get(t); const a=m.get(t-HR/2), b=m.get(t+HR/2); return a!==undefined&&b!==undefined?(a+b)/2:(a!==undefined?a:(b!==undefined?b:NaN)); };   // 時間値を30分刻みに補間
-  const st={n:0,lng:[],lat:[],obs:[],fc:[],names:[]};
+  const st={n:0,lng:[],lat:[],obs:[],pre:[],fc:[],names:[]};
   for(const s of byS.values()){ if(s.lo<B.west||s.lo>B.east||s.la<B.south||s.la>B.north) continue;
-    const o=new Float32Array(7), f=new Float32Array(STEPS+1); let any=false;
+    const o=new Float32Array(7), f=new Float32Array(STEPS+1), pr=new Float32Array(PRE_N); let any=false;
+    for(let i=0;i<PRE_N;i++) pr[i]=val(s.v,T-(2*PRE_N-i)*STEP_MIN*60000);
     for(let i=0;i<7;i++){ o[i]=val(s.v,T-(6-i)*STEP_MIN*60000); if(o[i]>=0) any=true; }
     for(let k=0;k<=STEPS;k++) f[k]=val(s.v,T+k*STEP_MIN*60000);
-    if(any){ st.n++; st.lng.push(s.lo); st.lat.push(s.la); st.obs.push(o); st.fc.push(f); st.names.push(s.name); } }
+    if(any){ st.n++; st.lng.push(s.lo); st.lat.push(s.la); st.obs.push(o); st.pre.push(pr); st.fc.push(f); st.names.push(s.name); } }
   if(!st.n) throw new Error('対象エリア周辺で、その時刻の保存データがある観測所がありません'+(miss.size?`（座標不明：${[...miss].slice(0,3).join('、')}。緯度・経度の列を足してください）`:''));
   RAIN.st=st; RAIN.obsTime=new Date(T);
   RAIN.status.obs=`保存データ（CSV）${st.n}地点／基準 ${hhmmOf(RAIN.obsTime)}`+(miss.size?`／座標不明で除外 ${miss.size}地点`:'');
@@ -716,7 +720,7 @@ async function loadFc(now){
   let fl=list.filter(e=>e.validtime>e.basetime&&isR(e));                      // 予報
   if(RAIN.asOf){ const lim=jstStampUtc(now); fl=fl.filter(e=>e.basetime<=lim); }   // 基準時刻以前に発表された予報のみ
   const B=fl.length?fl.reduce((m,e)=>e.basetime>m?e.basetime:m,'0'):null, ent=fl.filter(e=>e.basetime===B);
-  const fsteps=[null], asteps=[], kinds=[]; let nAct=0;
+  const fsteps=[null], asteps=[], psteps=[], kinds=[]; let nAct=0;
   for(let k=1;k<=STEPS;k++){
     const tgt=now.getTime()+k*STEP_MIN*60000;
     let e=B?nearestEntry(ent,tgt,20*60000):null, kind='f';
@@ -724,16 +728,18 @@ async function loadFc(now){
     fsteps[k]=e; kinds[k]=kind; if(e&&kind==='a') nAct++;
   }
   for(let i=0;i<7;i++) asteps[i]=nearestEntry(an,now.getTime()-(6-i)*STEP_MIN*60000,10*60000);
+  for(let i=0;i<PRE_N;i++) psteps[i]=nearestEntry(an,now.getTime()-(2*PRE_N-i)*STEP_MIN*60000,10*60000);   // 3〜6時間前（内水の貯留計算用）
   const Z=RAIN_TILE_Z, [gx0,gy0]=mercPx(AREA.west,AREA.north,Z), [gx1,gy1]=mercPx(AREA.east,AREA.south,Z), tl=[];
   for(let ty=Math.floor(gy0/256);ty<=Math.floor(gy1/256);ty++) for(let tx=Math.floor(gx0/256);tx<=Math.floor(gx1/256);tx++) tl.push([tx,ty]);
   if(!fsteps.some(Boolean)&&!asteps.some(Boolean)) throw new Error(RAIN.asOf?'この時刻の雨量タイルは配信されていません（配信は直近約1日分）':'雨量タイルの時刻情報がありません');
-  const outF=[null], outA=[]; let okN=0,ngN=0,lastErr='',mx=0,nF=0,nA=0;
+  const outF=[null], outA=[], outP=[]; let okN=0,ngN=0,lastErr='',mx=0,nF=0,nA=0;
   const run=async(e,put,cnt)=>{ if(!e) return; const r=await tileSet(e,tl); put(r.m); okN+=r.ok; ngN+=r.ng; if(r.err) lastErr=r.err; if(r.mx>mx) mx=r.mx; if(r.ok) cnt(); };
   await Promise.all([
     ...fsteps.map((e,k)=>k?run(e,m=>{outF[k]=m;},()=>{ if(kinds[k]==='f') nF++; }):null),
-    ...asteps.map((e,i)=>run(e,m=>{outA[i]=m;},()=>{nA++;}))]);
+    ...asteps.map((e,i)=>run(e,m=>{outA[i]=m;},()=>{nA++;})),
+    ...psteps.map((e,i)=>run(e,m=>{outP[i]=m;},()=>{}))]);
   if(!okN) throw new Error('降水タイルを取得できません（'+(lastErr||'時刻が合いません')+'）');
-  RAIN.fc={steps:outF}; RAIN.an={steps:outA}; RAIN.fcBase=B?new Date(parseJmaUtc(B)):null;
+  RAIN.fc={steps:outF}; RAIN.an={steps:outA,pre:outP}; RAIN.fcBase=B?new Date(parseJmaUtc(B)):null;
   RAIN.status.fc=`解析雨量 ${nA}/7時点・予報 ${nF}/${STEPS}時点${B?`（基準 ${hhmmOf(RAIN.fcBase)}）`:''}${nAct?`・実績で補完 ${nAct}時点`:''}／最大 ${mx}mm/h`+(mx===0?'（対象エリアに雨はありません）':'')+(ngN?`／一部取得失敗${ngN}件`:'');
 }
 async function refreshRain(){
@@ -777,7 +783,7 @@ function fcAt(lng,lat){
   for(let k=1;k<=STEPS;k++){ const v=tileVal(F.steps[k],lng,lat); if(v!==undefined) out[k]=v; }
   return out;
 }
-const ZERO_RAIN=()=>({obs:new Float32Array(7),fc:new Float32Array(STEPS+1)});
+const ZERO_RAIN=()=>({obs:new Float32Array(7),fc:new Float32Array(STEPS+1),pre:new Float32Array(PRE_N)});
 function simSeries(){   // シミュレーション：現在までの雨は固定、先の雨は入力値×倍率
   const obs=Float32Array.from(SIM_OBS_RAIN), fc=new Float32Array(STEPS+1); fc[0]=obs[6];
   for(let t=1;t<=STEPS;t++) fc[t]=Math.max(0,+DATA.rain.fc[t]||0)*DATA.rain.mult;
@@ -785,31 +791,39 @@ function simSeries(){   // シミュレーション：現在までの雨は固�
 }
 function rainAtPoint(lng,lat){   // 地点の雨量 {obs[7], fc[13]} [mm/h]
   if(DATA.mode==='sim') return inSelected(lng,lat)?simSeries():ZERO_RAIN();   // シミュレーションは選択した市町村内だけに降らせる
-  const obs=idw(lng,lat), fc=fcAt(lng,lat);
-  if(RAIN.an) for(let i=0;i<7;i++){ const v=tileVal(RAIN.an.steps[i],lng,lat); if(v!==undefined) obs[i]=v; }   // 解析雨量（レーダー＋アメダス）を優先
+  const obs=idw(lng,lat), fc=fcAt(lng,lat), pre=idw(lng,lat,'pre',PRE_N);
+  if(RAIN.an){ for(let i=0;i<7;i++){ const v=tileVal(RAIN.an.steps[i],lng,lat); if(v!==undefined) obs[i]=v; }
+    if(RAIN.an.pre) for(let i=0;i<PRE_N;i++){ const v=tileVal(RAIN.an.pre[i],lng,lat); if(v!==undefined) pre[i]=v; } }   // 解析雨量（レーダー＋アメダス）を優先
   if(RAIN.st&&RAIN.st.fc){   // 予報タイルが無い時刻は、保存したCSVの実績雨量で補う
     let alt=null; for(let k=1;k<=STEPS;k++){ if(RAIN.fc&&RAIN.fc.steps[k]) continue; if(!alt) alt=idw(lng,lat,'fc',STEPS+1); fc[k]=alt[k]; }
   }
-  fc[0]=obs[6]; return {obs,fc};
+  fc[0]=obs[6]; return {obs,fc,pre};
 }
-// 内水に効く「排水能力を超えた雨量」の累積[mm]
-function excess(r){
-  const dr=+DATA.rain.drain||0; let c=0;
-  if(DATA.mode==='sim') c=SIM_INNER_INIT; else for(let i=1;i<=6;i++) c+=Math.max(0,r.obs[i]-dr)*STEP_MIN/60;
-  const out=new Float32Array(STEPS+1); out[0]=c;
-  for(let t=1;t<=STEPS;t++){ c+=Math.max(0,r.fc[t]-dr)*STEP_MIN/60; out[t]=c; }
+// 内水判定（貯留モデル）：雨量から地形ごとの排水能力D[mm/h]を引いた分を、基準の6時間前から貯める（雨が弱まれば排水で減る）。
+//  貯留量Sが許容量Scを超えた分e=S−Scが、内水の浸水深を決める。くぼ地が深いほどDもScも小さい＝少ない雨・短時間で浸水する
+const terrClass=sk=>{ if(!sk) return TERR[3]; const d=sk.spill-sk.h; return d>=1?TERR[0]:d>=0.3?TERR[1]:TERR[2]; };
+const rv=v=>v>=0?v:0;
+function excess(r,sk){
+  const dr=+DATA.rain.drain||0, C=terrClass(sk), D=dr*C.k, Sc=dr*C.sc, dt=STEP_MIN/60, sim=DATA.mode==='sim';
+  const out=new Float32Array(STEPS+1); out.past=new Float32Array(7);
+  let S=0;
+  if(sim) S=0.5*Sc;   // シミュレーション：許容量の半分が溜まった状態から開始
+  else{ const seq=[...(r.pre||new Float32Array(PRE_N)),...r.obs];
+    for(let k=1;k<seq.length;k++){ S=Math.max(0,S+(rv(seq[k])-D)*dt); if(k>=PRE_N) out.past[k-PRE_N]=Math.max(0,S-Sc); } }
+  out[0]=Math.max(0,S-Sc);
+  for(let t=1;t<=STEPS;t++){ S=Math.max(0,S+(rv(r.fc[t])-D)*dt); out[t]=Math.max(0,S-Sc); }
   return out;
 }
-const pointExc=(lng,lat)=>excess(rainAtPoint(lng,lat));
+const pointExc=(lng,lat)=>{ const T=terrainAt(lng,lat); return excess(rainAtPoint(lng,lat),T&&T.sk); };
 // 全メッシュの雨量・累積超過雨量を更新し、対象エリアの平均雨量（グラフ・水位計算用）を求める
 function applyRain(){
   const so=new Float64Array(7), sf=new Float64Array(STEPS+1);
   if(DATA.mode==='sim'){
-    const r=simSeries(), ex=excess(r); for(const m of MESH){ m.ex=ex; m.rn=r.fc; }
+    const r=simSeries(); for(const m of MESH){ m.ex=excess(r,m.sk); m.rn=r.fc; }
     so.set(r.obs); sf.set(r.fc);
   }else{
     const pts=MESH.length?MESH:[{c:AREA.center}];
-    for(const m of pts){ const r=rainAtPoint(m.c[0],m.c[1]); if(m.ex!==undefined||MESH.length){ m.ex=excess(r); m.rn=r.fc; }
+    for(const m of pts){ const r=rainAtPoint(m.c[0],m.c[1]); if(m.ex!==undefined||MESH.length){ m.ex=excess(r,m.sk); m.rn=r.fc; }
       for(let i=0;i<7;i++) so[i]+=r.obs[i]; for(let i=0;i<=STEPS;i++) sf[i]+=r.fc[i]; }
     const n=pts.length; for(let i=0;i<7;i++) so[i]/=n; for(let i=0;i<=STEPS;i++) sf[i]/=n;
   }
@@ -838,7 +852,7 @@ function computeSeries(){
 }
 // 内水：くぼ地に溜まる水深。sk＝くぼ地情報{bottom,spill,h}／null、e＝累積超過雨量[mm]
 function innerDepth(sk,e,pond){
-  if(!sk) return 0;
+  if(!sk) return Math.min(FLAT_MAX_DEPTH,e*0.004*(1+pond));   // 平地：排水能力を大きく超えたときだけ浅く冠水
   const avail=e/INNER_DIV*INNER_GAIN*(1+pond);                       // 溜まる水位[m]（仮）
   return Math.max(0, sk.bottom+Math.min(avail,sk.spill-sk.bottom)-sk.h);   // 水面標高−地盤標高
 }
@@ -910,11 +924,9 @@ function meshAt(lng,lat){ for(const m of MESH){ const r=m.ring; if(lng>=r[0][0]&
 function updateSensor(s){
   const m=meshAt(s.lng,s.lat); s.pred=new Array(STEPS+1).fill(0); s.readings=new Array(7).fill(0); if(!m) return;
   for(let t=0;t<=STEPS;t++) s.pred[t]=Math.round(Math.max(0,baseDepth(m.k,m.hand,m.sk,m.ex,t))*100);
-  const r=rainAtPoint(m.c[0],m.c[1]), dr=+DATA.rain.drain||0; let c=0;
   for(let i=0;i<7;i++){
-    if(DATA.mode==='sim') c=SIM_INNER_INIT*i/6; else if(i>0) c+=Math.max(0,r.obs[i]-dr)*STEP_MIN/60;
     const H=Math.max(0,OBS_LEVEL[i]-BANK_HEIGHT)*2.2*m.k;
-    s.readings[i]=Math.round(Math.max(0,H-m.hand,innerDepth(m.sk,c,0))*100);
+    s.readings[i]=Math.round(Math.max(0,H-m.hand,innerDepth(m.sk,m.ex?m.ex.past[i]:0,0))*100);
   }
   s.readings[6]=s.pred[0];
 }
@@ -1037,7 +1049,7 @@ function rebuildMarkers(){
     e.addEventListener('click',ev=>{ev.stopPropagation(); if(!pickCb) select('sen',s.id);});
     markers['sen:'+s.id]={el:e,dia:e.querySelector('.dia'),val:e.querySelector('.val'),mk:new maplibregl.Marker({element:e,anchor:'center'}).setLngLat([s.lng,s.lat]).addTo(map)};
   });
-  refreshMarkers();
+  refreshMarkers(); applyMkVis();
 }
 function refreshMarkers(){
   if(!mapReady) return;
@@ -1074,6 +1086,9 @@ function checkBldg(k){
     else $('bldgStatus').textContent=''; };
 });
 let sinkOn=false, rainOn=false;
+const showMk={fac:true,sen:true};
+function applyMkVis(){ for(const k in markers) markers[k].el.style.display=showMk[k.slice(0,3)]?'':'none'; }
+[['fac','facBtn','施設表示'],['sen','senBtn','センサ表示']].forEach(([k,id,lbl])=>{ $(id).onclick=()=>{ showMk[k]=!showMk[k]; $(id).classList.toggle('on',showMk[k]); $(id).textContent=lbl+(showMk[k]?' ON':' OFF'); applyMkVis(); }; });
 $('rainBtn').onclick=()=>{ rainOn=!rainOn; $('rainBtn').classList.toggle('on',rainOn); $('rainBtn').textContent='降水量メッシュ '+(rainOn?'ON':'OFF');
   $('rainLegend').style.display=rainOn?'':'none';
   if(mapReady){ map.setLayoutProperty('rain-fill','visibility',rainOn?'visible':'none'); if(rainOn) map.getSource('rain').setData(rainGeoJSON(cur)); } };
