@@ -662,15 +662,20 @@ function parseRainCsv(text){   // → [{name,lat,lon,t,mm}]
 async function loadCsvObs(now){
   const ym=t=>{ const j=new Date(t+9*3600e3); return ''+j.getUTCFullYear()+p2(j.getUTCMonth()+1); };
   const need=[...new Set([now.getTime()-3*3600e3,now.getTime(),now.getTime()+STEPS*STEP_MIN*60000].map(ym))];
+  // ファイル名：YYYYMM_県名(英字).csv（例 202610_fukuoka.csv）。県ごとに別ファイルでよい。YYYYMM.csv（県をまとめた1本）も読む
+  const tasks=[]; for(const m of need){ tasks.push([m,'',m+'.csv']); for(const k in CSV_PREF) tasks.push([m,k,m+'_'+k+'.csv']); }
   let recs=[], got=0;
-  for(const m of need){ try{ const r=await fetch(CSV_URL+m+'.csv',{cache:'no-store'}); if(!r.ok) continue; recs=recs.concat(parseRainCsv(decodeText(await r.arrayBuffer()))); got++; }
-    catch(e){ throw new Error(`${CSV_URL}${m}.csv を読めません：${e.message}`); } }
-  if(!got) throw new Error(`保存データ（${CSV_URL}${need[0]}.csv）がありません`);
+  const res=await Promise.all(tasks.map(async([m,k,f])=>{ try{ const r=await fetch(CSV_URL+f,{cache:'no-store'}); if(!r.ok) return null;
+      const rs=parseRainCsv(decodeText(await r.arrayBuffer())); rs.forEach(x=>x.pref=k); return rs; }
+    catch(e){ return {err:`${CSV_URL}${f} を読めません：${e.message}`}; } }));
+  for(const r of res){ if(!r) continue; if(r.err) throw new Error(r.err); recs=recs.concat(r); got++; }
+  if(!got) throw new Error(`保存データ（${CSV_URL}${need[0]}_fukuoka.csv など）がありません`);
   if(recs.some(r=>!(r.lat>0)&&r.name)){ if(!AMEDAS_TABLE){ try{ AMEDAS_TABLE=await jget(JMA_AMEDAS+'const/amedastable.json'); }catch(e){} } }
-  const coord=n=>{ if(!AMEDAS_TABLE) return null; for(const id in AMEDAS_TABLE){ const s=AMEDAS_TABLE[id]; if(s.kjName!==n||!s.lat||!s.lon) continue;
-    const la=s.lat[0]+s.lat[1]/60, lo=s.lon[0]+s.lon[1]/60; if(lo>128&&lo<132.5&&la>26.8&&la<34.9) return [lo,la]; } return null; };
+  const coord=(n,pf)=>{ const pass=[pf&&CSV_PREF[pf]?CSV_PREF[pf]:null,null];
+    for(const pre of pass){ for(const id in AMEDAS_TABLE||{}){ const s=AMEDAS_TABLE[id]; if(s.kjName!==n||!s.lat||!s.lon) continue; if(pre&&!id.startsWith(pre)) continue;
+      const la=s.lat[0]+s.lat[1]/60, lo=s.lon[0]+s.lon[1]/60; if(lo>128&&lo<132.5&&la>26.8&&la<34.9) return [lo,la]; } } return null; };
   const byS=new Map(), miss=new Set();
-  for(const r of recs){ let la=r.lat, lo=r.lon; if(!(la>0&&lo>0)){ const c=coord(r.name); if(!c){ miss.add(r.name||'（観測所名なし）'); continue; } [lo,la]=c; }
+  for(const r of recs){ let la=r.lat, lo=r.lon; if(!(la>0&&lo>0)){ const c=coord(r.name,r.pref); if(!c){ miss.add(r.name||'（観測所名なし）'); continue; } [lo,la]=c; }
     const k=lo.toFixed(4)+','+la.toFixed(4); if(!byS.has(k)) byS.set(k,{name:r.name,lo,la,v:new Map()}); byS.get(k).v.set(r.t,r.mm); }
   const B={west:AREA.west-0.5,east:AREA.east+0.5,south:AREA.south-0.4,north:AREA.north+0.4}, T=now.getTime(), HR=3600e3;
   const val=(m,t)=>{ if(m.has(t)) return m.get(t); const a=m.get(t-HR/2), b=m.get(t+HR/2); return a!==undefined&&b!==undefined?(a+b)/2:(a!==undefined?a:(b!==undefined?b:NaN)); };   // 時間値を30分刻みに補間
